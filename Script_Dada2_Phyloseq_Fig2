@@ -142,7 +142,7 @@ all(samdf$sample_id %in% rownames(seqtab.nochim)) # TRUE
 all(colnames(seqtab.nochim) %in% rownames(taxa)) # TRUE
 all(rownames(taxa) %in% colnames(seqtab.nochim)) # TRUE
 
-#Make phylogenetic tree
+#Make phylogenetic tree (not used for Sondo et al article, we produced a tree in MEGA11 and worked after in NAMCO server (https://exbio.wzw.tum.de/namco/) for functional predictions with PiCrust2)
 
 #first alignment is made
 seqs <- getSequences(seqtab.nochim)
