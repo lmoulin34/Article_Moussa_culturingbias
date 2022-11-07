@@ -1,0 +1,371 @@
+#Script used to create Figure 2 (rarefaction curves, alpha and beta diversity)
+
+#command to install using BioManager
+if (!requireNamespace("BiocManager", quietly = TRUE))
+  install.packages("BiocManager")
+
+
+BiocManager::install("phyloseq")
+BiocManager::install("DECIPHER")
+BiocManager::install("Biostrings")
+BiocManager::install("ggplot2")
+BiocManager::install("dplyr")
+BiocManager::install("dada2")
+BiocManager::install("DESeq2")
+BiocManager::install("msa")
+BiocManager::install("phangorn")
+BiocManager::install("devtools")
+BiocManager::install("Rtools")
+install.packages("microbiome")
+
+#Load libraries
+
+  library(phyloseq)
+  library(DECIPHER)
+  library(dada2)
+  library(vegan)
+  library(Biostrings)
+  library(ggplot2)
+  library(dplyr)
+  library(DESeq2)
+  library(msa)
+  library(phangorn)
+
+#starting the dada2 pipeline
+
+path <- "C:/Users/moulinl/Documents/Thèse_Moussa_Sondo/Fastq-cutivables"    #CHANGE ME to the directory containing the fastq files after unzipping.
+list.files(path)
+
+
+# Forward and reverse fastq filenames have format: SAMPLENAME-16S_1.fastq and SAMPLENAME-16S_2.fastq
+fnFs <- sort(list.files(path, pattern="_1.fastq", full.names = TRUE))
+fnRs <- sort(list.files(path, pattern="_2.fastq", full.names = TRUE))
+# Extract sample names, assuming filenames have format: SAMPLENAME_XXX.fastq
+sample.names <- sapply(strsplit(basename(fnFs), "_"), `[`, 1)
+
+#Inspect read quality profiles
+plotQualityProfile(fnFs[1:2])
+
+plotQualityProfile(fnRs[1:2])
+
+#Filter and trim: Assign the filenames for the filtered fastq.gz files.
+
+# Place filtered files in filtered/ subdirectory
+filtFs <- file.path(path, "filtered", paste0(sample.names, "_F_filt.fastq.gz"))
+filtRs <- file.path(path, "filtered", paste0(sample.names, "_R_filt.fastq.gz"))
+names(filtFs) <- sample.names
+names(filtRs) <- sample.names
+
+#Filter:
+out <- filterAndTrim(fnFs, filtFs, fnRs, filtRs, truncLen=c(280,205), maxN=0, maxEE=c(2,2), trimLeft = c(20, 20), truncQ=2, rm.phix=TRUE,compress=TRUE,  multithread=FALSE)
+# On Windows set multithread=FALSE; attention ici on trime les primers de 20 pb en amont de chaque sequence for et Rev (trimleft)
+
+
+head(out) 
+#Learn the Error Rates
+
+errF <- learnErrors(filtFs, multithread=TRUE)
+errR <- learnErrors(filtRs, multithread=TRUE)
+
+plotErrors(errF, nominalQ=TRUE)
+plotErrors(errR, nominalQ=TRUE)
+
+#Sample Inference
+dadaFs <- dada(filtFs, err=errF, multithread=TRUE)
+
+dadaRs <- dada(filtRs, err=errR, multithread=TRUE)
+
+#Inspecting the returned dada-class object:
+dadaFs[[1]]
+
+#Merge paired reads
+mergers <- mergePairs(dadaFs, filtFs, dadaRs, filtRs, verbose=TRUE)
+
+# Inspect the merger data.frame from the first sample
+
+head(mergers[[1]])
+
+#Construct sequence table
+seqtab <- makeSequenceTable(mergers)
+dim(seqtab)
+
+# Inspect distribution of sequence lengths
+table(nchar(getSequences(seqtab)))
+
+#Remove non-target-length sequences from your sequence table (eg. seqtab2 <- seqtab[,nchar(colnames(seqtab)) %in% 250:256]). This is analogous to "cutting a band" in-silico to get amplicons of the targeted length. 
+seqtab2 <- seqtab[,nchar(colnames(seqtab)) %in% 399:428]
+
+
+#Remove chimeras
+seqtab.nochim <- removeBimeraDenovo(seqtab2, method="consensus", multithread=TRUE, verbose=TRUE)
+dim(seqtab.nochim)
+
+sum(seqtab.nochim)/sum(seqtab2)
+
+#Track reads through the pipeline
+getN <- function(x) sum(getUniques(x))
+track <- cbind(out, sapply(dadaFs, getN), sapply(dadaRs, getN), sapply(mergers, getN), rowSums(seqtab.nochim))
+colnames(track) <- c("input", "filtered", "denoisedF", "denoisedR", "merged", "nonchim")
+rownames(track) <- sample.names
+head(track)
+
+#Assign taxonomy
+#1. methode classique (long)
+taxa <- assignTaxonomy(seqtab.nochim, "C:/Users/moulinl/Documents/Thèse_Moussa_Sondo/silva_nr_v132_train_set.fa.gz", multithread=TRUE)
+
+#Add species level:
+taxa <- addSpecies(taxa, "C:/Users/moulinl/Documents/Thèse_Moussa_Sondo/silva_species_assignment_v132.fa.gz")
+
+#inspect the taxonomic assignments:
+taxa.print <- taxa # Removing sequence rownames for display only
+rownames(taxa.print) <- NULL
+head(taxa.print)
+
+#load metadata file
+samdf <- read.csv2("C:/Users/moulinl/Documents/Thèse_Moussa_Sondo/metadata2.csv")
+
+all(rownames(seqtab.nochim) %in% samdf$sample_id) # TRUE pour verifier que les noms concordent
+
+rownames(samdf) <- samdf$sample_id
+keep.cols <- c("sample_id", "compartment", "replicate", "medium", "condition") # a changer avec le nom de tes colonnes de m?tadonn?es
+samdf <- samdf[rownames(seqtab.nochim), keep.cols]
+
+samples.out <- rownames(seqtab.nochim)
+rownames(samdf) <- samples.out
+
+# check correespondance between samplenames between seqtab and samdf
+all(rownames(seqtab.nochim) %in% samdf$sample_id) # TRUE
+all(samdf$sample_id %in% rownames(seqtab.nochim)) # TRUE
+
+# check correespondance between taxanames between seqtab and taxa
+all(colnames(seqtab.nochim) %in% rownames(taxa)) # TRUE
+all(rownames(taxa) %in% colnames(seqtab.nochim)) # TRUE
+
+#Make phylogenetic tree
+
+#first alignment is made
+seqs <- getSequences(seqtab.nochim)
+names(seqs) <- seqs # This propagates to the tip labels of the tree
+alignment <- AlignSeqs(DNAStringSet(seqs), anchor=NA)
+
+saveRDS(alignment, "alignment.RDS")
+
+#then tree with phangorn package (here a neighbor joining tree is built; then a maximum likelihood but care about processing time)
+
+phang.align <- phyDat(as(alignment, "matrix"), type="DNA")
+dm <- dist.ml(phang.align)
+treeNJ <- NJ(dm) # Note, tip order != sequence order
+fit = pml(treeNJ, data=phang.align)
+## negative edges length changed to 0!
+
+fitGTR <- update(fit, k=4, inv=0.2)
+fitGTR <- optim.pml(fitGTR, model="GTR", optInv=TRUE, optGamma=TRUE,
+                    rearrangement = "stochastic", control = pml.control(trace = 0))
+detach("package:phangorn", unload=TRUE)
+
+#export tree in newick format
+ape::write.tree(treeNJ, file='filename.txt')
+
+# assemble and save phyloseq object
+
+#phyloseq object with phylogenetic tree
+ps <- phyloseq(tax_table(taxa), sample_data(samdf),otu_table(seqtab.nochim, taxa_are_rows = FALSE),phy_tree(fitGTR$tree))
+ps
+
+
+#phyloseq object without phylogenetic tree
+
+ps <- phyloseq(otu_table(seqtab.nochim, taxa_are_rows=FALSE), 
+                   sample_data(samdf), 
+                   tax_table(taxa))
+
+ps
+
+
+#Add ASV numbering instead of fasta sequence
+dna <- Biostrings::DNAStringSet(taxa_names(ps))
+names(dna) <- taxa_names(ps)
+ps  <- merge_phyloseq(ps, dna)
+taxa_names(ps) <- paste0("ASV", seq(ntaxa(ps)))
+ps
+
+
+#Plot richness
+plot_richness(ps, x="medium", measures=c("Shannon", "Simpson"), color="medium")
+
+plot_richness(ps, x="condition", measures=c("Shannon", "Simpson"), color="medium")
+
+#remove mitochondria and chloroplast 
+ps <- ps %>% subset_taxa( Family!= "mitochondria" | is.na(Family) & Class!="Chloroplast" | is.na(Class) ) 
+
+#remove Eukaryota
+ps <- ps %>% subset_taxa( Kingdom!= "Eukaryota" | is.na(Kingdom) & Class!="Chloroplast" | is.na(Class) ) 
+
+#rarefaction curves
+
+set.seed(42)
+
+calculate_rarefaction_curves <- function(ps, measures, depths) {
+  require('plyr') # ldply
+  require('reshape2') # melt
+  
+  estimate_rarified_richness <- function(ps, measures, depth) {
+    if(max(sample_sums(ps)) < depth) return()
+    ps <- prune_samples(sample_sums(ps) >= depth, ps)
+    
+    rarified_ps <- rarefy_even_depth(ps, depth, verbose = FALSE)
+    
+    alpha_diversity <- estimate_richness(rarified_ps, measures = measures)
+    
+    # as.matrix forces the use of melt.array, which includes the Sample names (rownames)
+    molten_alpha_diversity <- melt(as.matrix(alpha_diversity), varnames = c('Sample', 'Measure'), value.name = 'Alpha_diversity')
+    
+    molten_alpha_diversity
+  }
+  
+  names(depths) <- depths # this enables automatic addition of the Depth to the output by ldply
+  rarefaction_curve_data <- ldply(depths, estimate_rarified_richness, ps = ps, measures = measures, .id = 'Depth', .progress = ifelse(interactive(), 'text', 'none'))
+  
+  # convert Depth from factor to numeric
+  rarefaction_curve_data$Depth <- as.numeric(levels(rarefaction_curve_data$Depth))[rarefaction_curve_data$Depth]
+  
+  rarefaction_curve_data
+}
+
+
+rarefaction_curve_data <- calculate_rarefaction_curves(ps, c('Observed', 'Shannon'), rep(c(1, 10, 50, 100, 200, 400, 600, 800, 1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000, 11000, 12000, 13000, 14000, 15000), each = 10))
+
+summary(rarefaction_curve_data)
+
+
+rarefaction_curve_data_summary <- ddply(rarefaction_curve_data, c('Depth', 'Sample', 'Measure'), summarise, Alpha_diversity_mean = mean(Alpha_diversity), Alpha_diversity_sd = sd(Alpha_diversity))
+
+rarefaction_curve_data_summary_verbose <- merge(rarefaction_curve_data_summary, data.frame(sample_data(ps)), by.x = 'Sample', by.y = 'row.names')
+
+#Figure alpha-diversity
+ggplot(
+  data = rarefaction_curve_data_summary_verbose,
+  mapping = aes(
+    x = Depth,
+    y = Alpha_diversity_mean,
+    ymin = Alpha_diversity_mean - Alpha_diversity_sd,
+    ymax = Alpha_diversity_mean + Alpha_diversity_sd,
+    colour = medium,
+    group = Sample
+  )
+) + geom_line(
+) + facet_wrap(
+  facets = ~ Measure,
+  scales = 'free_y'
+) + theme_bw()
+
+
+#alpha diversity
+plot_richness(ps, x="sample_id", measures=c("Shannon", "Simpson"), color="medium")
+plot_richness(ps, x="condition", measures=c("Shannon", "Simpson"), color="medium")
+
+plot_richness(ps, x="medium", measures=c("Shannon", "Simpson"), color="medium")
+
+plot_richness(ps, x="medium", measures=c("condition", "Simpson"), color="medium") + geom_boxplot()
+
+plot_richness(ps, x="medium", measures=c("condition", "Shannon"), color="medium") + geom_boxplot()
+
+#Sorting data in en x with sortby:
+plot_richness(ps, x="medium", measures=c("condition", "Shannon"), color="medium", sortby = "Shannon") + geom_boxplot()
+plot_richness(ps, x="medium", measures=c("Shannon", "Simpson"), color="medium", sortby = "Shannon") + geom_boxplot()
+
+#Remove grey background
+plot_richness(ps, x="medium", measures=c("Shannon", "Simpson"), color="medium", sortby = "Shannon") + geom_boxplot() + theme_bw()
+
+#Export a table with richness scores
+rich = estimate_richness(ps.rarefied)
+rich
+
+# Transform data to proportions as appropriate for Bray-Curtis distances
+ps.prop <- transform_sample_counts(ps, function(otu) otu/sum(otu))
+ord.nmds.bray <- ordinate(ps.prop, method="NMDS",distance="bray")
+plot_ordination(ps.prop, ord.nmds.bray, color="medium", title="Bray NMDS")
+
+# PCoA plot using the unweighted UniFrac as distance
+wunifrac_dist = phyloseq::distance(ps, method="unifrac", weighted=F)
+ordination = ordinate(ps, method="PCoA", distance=wunifrac_dist)
+plot_ordination(ps, ordination, color="condition") + theme(aspect.ratio=1)
+#Test whether the seasons differ significantly from each other using the permutational ANOVA (PERMANOVA) analysis:
+
+adonis(wunifrac_dist ~ sample_data(ps_16S_5000F)$condition)
+
+#Bar plot of diversity
+#plot bars
+plot_bar(ps, fill="Phylum")
+
+
+# order
+desired_order <- list("S1", "S2", "S3", "S16", "S17", "S18", "S4", "S5", "S6", "S19", "S20", "S21", "S13", "S14", "S15", "S28", "S29", "S30", "S7", "S8", "S9", "S22", "S23", "S24", "S10", "S11", "S12", "S25", "S26", "S27", "S37", "S31", "S32", "S33", "S34", "S35")
+
+
+p <- plot_bar(ps_16S, fill="Phylum") 
+p$data$Sample <- factor(p$data$Sample, levels = desired_order)
+print(p)
+
+#Rarefy data
+
+min_lib <- min(sample_sums(ps))
+
+ps_rarefy = rarefy_even_depth(ps, sample.size = min_lib, verbose = FALSE, replace = TRUE)
+
+#Relative abundance
+
+ps_relabun = transform_sample_counts(ps, function(x){x / sum(x)})
+
+#clr transformation
+
+ps_clr <- microbiome::transform(ps, "clr")
+
+#NMDS plot using Bray-Curtis distances with relative abundance data
+
+bray = ordinate(ps_relabun, “NMDS”, “bray”, weighted = TRUE)
+
+plot_ordination(ps_relabun, bray, color = "medium") + geom_point(size = 5) + theme_bw()
+
+
+#PCA plot using Euclidean distances with clr-transformed data
+
+ord_clr <- phyloseq::ordinate(ps_clr, “RDA”)
+
+phyloseq::plot_ordination(ps_clr, ord_clr, type=”samples”, color=”Site”)+ theme_bw()
+
+#Plotting figure 5
+
+p1 <- ggplot(
+  data = rarefaction_curve_data_summary_verbose,
+  mapping = aes(
+    x = Depth,
+    y = Alpha_diversity_mean,
+    ymin = Alpha_diversity_mean - Alpha_diversity_sd,
+    ymax = Alpha_diversity_mean + Alpha_diversity_sd,
+    colour = medium,
+    group = Sample
+  )
+) + geom_line(
+)  + facet_wrap(
+  facets = ~ Measure,
+  scales = 'free_y'
+) + theme_bw()
+
+p2 <- plot_richness(ps, x="medium", measures=c("Shannon"), color="medium", sortby = "Shannon") + geom_boxplot() + theme_bw()
+p4 <- plot_richness(ps, x="medium", measures=c("Simpson"), color="medium", sortby = "Simpson") + geom_boxplot() + theme_bw()
+
+#NMDS plot using Bray-Curtis distances with relative abundance data
+
+bray = ordinate(ps_relabun, “NMDS”, “bray”, weighted = TRUE)
+
+p3 <- plot_ordination(ps_relabun, bray, color = "medium") + geom_point(size = 3) + theme_bw()
+
+
+
+
+#Put all plots in one figure (Figure 2):
+
+cowplot::plot_grid(p1, p3, p2,p4, nrow = 2, align = 'v', axis = 'lr', rel_heights = c(1,1,2))
+
+
