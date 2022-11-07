@@ -1,0 +1,29 @@
+
+#GO term & Metacyc analysis  (Figure 5)
+
+
+library(ggplot2)
+library(forcats)
+library(dplyr)
+
+setwd('C:/Users/moulinl/Documents/articles/Moussa_cultivable/analyse functionnelle')
+
+data<-read.csv2('Enriched_Pathways_annotated.csv')   
+
+data$Cat <- as.factor(data$Cat)
+
+ggplot(data) +
+  geom_point(aes(x = pvalue, y = description, color=Cat, size=diff))  +
+  theme_bw() +
+  theme(axis.text.x = element_text(size=rel(1.15)),
+        axis.title = element_text(size=rel(1.15)))
+
+
+#With reodering depending on category:
+
+ggplot(data) +
+  geom_point(aes(x = pvalue, y = reorder(Metacyc, desc(Metacyc)), color=Metacyc, size=diff))  +
+  theme_bw() +  facet_wrap(~Cat, nrow = 1) +
+  theme(axis.text.x = element_text(size=rel(1.15)),
+        axis.title = element_text(size=rel(1.15)))
+
