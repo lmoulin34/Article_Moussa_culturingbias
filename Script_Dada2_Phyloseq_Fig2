@@ -30,6 +30,7 @@ install.packages("microbiome")
   library(DESeq2)
   library(msa)
   library(phangorn)
+  library(microbiome)
 
 #starting the dada2 pipeline
 
