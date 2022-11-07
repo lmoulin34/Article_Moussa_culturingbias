@@ -1,4 +1,4 @@
-#Script used to create Figure 2 (rarefaction curves, alpha and beta diversity)
+#Script used for DADA2 pipeline (ASV analysis), Phyloseq, and to create Figure 2 (rarefaction curves, alpha and beta diversity)
 
 #command to install using BioManager
 if (!requireNamespace("BiocManager", quietly = TRUE))
