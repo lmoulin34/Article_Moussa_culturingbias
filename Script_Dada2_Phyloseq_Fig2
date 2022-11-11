@@ -144,36 +144,6 @@ all(rownames(taxa) %in% colnames(seqtab.nochim)) # TRUE
 
 #Make phylogenetic tree (not used for Sondo et al article, we produced a tree in MEGA11 and worked after in NAMCO server (https://exbio.wzw.tum.de/namco/) for functional predictions with PiCrust2)
 
-#first alignment is made
-seqs <- getSequences(seqtab.nochim)
-names(seqs) <- seqs # This propagates to the tip labels of the tree
-alignment <- AlignSeqs(DNAStringSet(seqs), anchor=NA)
-
-saveRDS(alignment, "alignment.RDS")
-
-#then tree with phangorn package (here a neighbor joining tree is built; then a maximum likelihood but care about processing time)
-
-phang.align <- phyDat(as(alignment, "matrix"), type="DNA")
-dm <- dist.ml(phang.align)
-treeNJ <- NJ(dm) # Note, tip order != sequence order
-fit = pml(treeNJ, data=phang.align)
-## negative edges length changed to 0!
-
-fitGTR <- update(fit, k=4, inv=0.2)
-fitGTR <- optim.pml(fitGTR, model="GTR", optInv=TRUE, optGamma=TRUE,
-                    rearrangement = "stochastic", control = pml.control(trace = 0))
-detach("package:phangorn", unload=TRUE)
-
-#export tree in newick format
-ape::write.tree(treeNJ, file='filename.txt')
-
-# assemble and save phyloseq object
-
-#phyloseq object with phylogenetic tree
-ps <- phyloseq(tax_table(taxa), sample_data(samdf),otu_table(seqtab.nochim, taxa_are_rows = FALSE),phy_tree(fitGTR$tree))
-ps
-
-
 #phyloseq object without phylogenetic tree
 
 ps <- phyloseq(otu_table(seqtab.nochim, taxa_are_rows=FALSE), 
@@ -262,8 +232,6 @@ ggplot(
 
 
 #alpha diversity
-plot_richness(ps, x="sample_id", measures=c("Shannon", "Simpson"), color="medium")
-plot_richness(ps, x="condition", measures=c("Shannon", "Simpson"), color="medium")
 
 plot_richness(ps, x="medium", measures=c("Shannon", "Simpson"), color="medium")
 
@@ -271,8 +239,7 @@ plot_richness(ps, x="medium", measures=c("condition", "Simpson"), color="medium"
 
 plot_richness(ps, x="medium", measures=c("condition", "Shannon"), color="medium") + geom_boxplot()
 
-#Sorting data in en x with sortby:
-plot_richness(ps, x="medium", measures=c("condition", "Shannon"), color="medium", sortby = "Shannon") + geom_boxplot()
+#Sorting data in x with sortby:
 plot_richness(ps, x="medium", measures=c("Shannon", "Simpson"), color="medium", sortby = "Shannon") + geom_boxplot()
 
 #Remove grey background
@@ -304,7 +271,7 @@ plot_bar(ps, fill="Phylum")
 desired_order <- list("S1", "S2", "S3", "S16", "S17", "S18", "S4", "S5", "S6", "S19", "S20", "S21", "S13", "S14", "S15", "S28", "S29", "S30", "S7", "S8", "S9", "S22", "S23", "S24", "S10", "S11", "S12", "S25", "S26", "S27", "S37", "S31", "S32", "S33", "S34", "S35")
 
 
-p <- plot_bar(ps_16S, fill="Phylum") 
+p <- plot_bar(ps, fill="Phylum") 
 p$data$Sample <- factor(p$data$Sample, levels = desired_order)
 print(p)
 
@@ -361,7 +328,6 @@ p4 <- plot_richness(ps, x="medium", measures=c("Simpson"), color="medium", sortb
 bray = ordinate(ps_relabun, “NMDS”, “bray”, weighted = TRUE)
 
 p3 <- plot_ordination(ps_relabun, bray, color = "medium") + geom_point(size = 3) + theme_bw()
-
 
 
 
